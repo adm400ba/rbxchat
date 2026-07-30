@@ -1,48 +1,44 @@
 export class ChatRoom {
   constructor(state, env) {
     this.state = state;
-    this.sessions = [];
+    this.env = env;
   }
 
   async fetch(request) {
-    const { 0: client, 1: server } = new WebSocketPair();
-    server.accept();
-    
-    this.sessions.push(server);
+    const upgradeHeader = request.headers.get("Upgrade");
+    if (upgradeHeader !== "websocket") {
+      return new Response("Expected Upgrade: websocket", { status: 426 });
+    }
 
-    server.addEventListener("message", (msg) => {
-      this.sessions.forEach(session => {
-        if (session !== server) {
-          try {
-            session.send(msg.data);
-          } catch (e) {}
-        }
-      });
+    const [client, server] = Object.values(new WebSocketPair());
+    this.state.acceptWebSocket(server);
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
     });
+  }
 
-    let cleanup = () => {
-      this.sessions = this.sessions.filter(s => s !== server);
-    };
-    
-    server.addEventListener("close", cleanup);
-    server.addEventListener("error", cleanup);
+  async webSocketMessage(ws, message) {
+    const sockets = this.state.getWebSockets();
+    for (let s of sockets) {
+      s.send(message);
+    }
+  }
 
-    return new Response(null, { status: 101, webSocket: client });
+  async webSocketClose(ws, code, reason, wasClean) {
+    ws.close(code, reason);
   }
 }
 
 export default {
-  async fetch(request, env) {
-    if (request.headers.get("Upgrade") !== "websocket") {
-      return new Response("Expected WebSocket", { status: 426 });
-    }
-
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const roomName = url.searchParams.get("room") || "global";
-
-    let id = env.CHAT_ROOM.idFromName(roomName);
-    let stub = env.CHAT_ROOM.get(id);
     
+    const id = env.CHAT_ROOM.idFromName(roomName);
+    const stub = env.CHAT_ROOM.get(id);
+
     return stub.fetch(request);
   }
 };
